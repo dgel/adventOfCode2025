@@ -25,20 +25,20 @@ fn parse(input: &str) -> Option<Vec<RangeInclusive<u64>>> {
             for error in errors {
                 println!("Failed to parse input: {}", error);
             }
-            return None;
+            None
         }
     }
 }
 
 fn is_invalid_id(id: u64) -> bool {
     let num_digits = id.checked_ilog10().unwrap_or(0) + 1;
-    if num_digits % 2 != 0 {
+    if !num_digits.is_multiple_of(2) {
         return false;
     }
     let formatted = id.to_string().into_bytes();
     let middle = num_digits / 2;
     let (first, second) = formatted.as_slice().split_at(middle as usize);
-    return first == second;
+    first == second
 }
 
 pub fn part_one(input: &str) -> Option<u64> {
@@ -46,7 +46,7 @@ pub fn part_one(input: &str) -> Option<u64> {
     id_ranges.map(|ranges| {
         ranges
             .iter()
-            .flat_map(|range| range.clone().into_iter())
+            .flat_map(|range| range.clone())
             .filter(|&id| is_invalid_id(id))
             .sum()
     })
@@ -55,7 +55,7 @@ pub fn part_one(input: &str) -> Option<u64> {
 fn is_invalid_id_2(id: u64) -> bool {
     let formatted = id.to_string().into_bytes();
     for pattern_length in 1..=(formatted.len() / 2) {
-        if formatted.len() % pattern_length != 0 {
+        if !formatted.len().is_multiple_of(pattern_length) {
             continue;
         }
 
@@ -83,7 +83,7 @@ pub fn part_two(input: &str) -> Option<u64> {
     id_ranges.map(|ranges| {
         ranges
             .iter()
-            .flat_map(|range| range.clone().into_iter())
+            .flat_map(|range| range.clone())
             .filter(|&id| is_invalid_id_2(id))
             .sum()
     })

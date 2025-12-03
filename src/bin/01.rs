@@ -8,7 +8,7 @@ fn parse(input: &str) -> Option<Vec<i64>> {
         .ignore_then(digits(10).to_slice())
         .from_str::<i64>()
         .unwrapped()
-        .map(|i| -1 * i);
+        .map(|i| -i);
     let right = just('R')
         .ignore_then(digits(10).to_slice())
         .from_str::<i64>()
@@ -24,7 +24,7 @@ fn parse(input: &str) -> Option<Vec<i64>> {
             for error in errors {
                 println!("Failed to parse input: {}", error);
             }
-            return None;
+            None
         }
     }
 }
