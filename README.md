@@ -15,6 +15,7 @@ Basic structure set up [this template repository](https://github.com/fspoettel/a
 | [Day 2](https://adventofcode.com/2025/day/2) | ⭐ | ⭐ |
 | [Day 3](https://adventofcode.com/2025/day/3) | ⭐ | ⭐ |
 | [Day 4](https://adventofcode.com/2025/day/4) | ⭐ | ⭐ |
+| [Day 5](https://adventofcode.com/2025/day/5) | ⭐ | ⭐ |
 <!--- advent_readme_stars table --->
 
 <!--- benchmarking table --->
