@@ -21,6 +21,7 @@ test_lib = []
 
 [dependencies]
 anyhow = "1.0.100"
+by_address = "1.2.1"
 
 # Template dependencies
 chrono = { version = "0.4.38", optional = true }
