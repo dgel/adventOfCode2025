@@ -31,7 +31,7 @@ fn parse(input: &str) -> Option<Vec<(String, Vec<String>)>> {
 }
 
 struct GraphEntry<'a> {
-    name: &'a str,
+    _name: &'a str,
     connections: Vec<usize>,
 }
 
@@ -43,7 +43,7 @@ fn get_index<'a>(
     let index = *index_map.entry(name).or_insert(graph.len());
     if index == graph.len() {
         graph.push(GraphEntry {
-            name,
+            _name: name,
             connections: Vec::new(),
         });
     }
