@@ -1,15 +1,246 @@
 pub mod template;
 use num_integer::gcd;
 use rand::{rng, rngs::ThreadRng, seq::IteratorRandom};
-use std::collections::HashSet;
+use std::collections::{BinaryHeap, HashSet};
 use std::f32;
 use std::fmt::Display;
 use std::ops::{Add, AddAssign, Div, DivAssign, Index, IndexMut, Mul, MulAssign, Sub, SubAssign};
 use std::rc::Rc;
 
 pub type Point3d = [u64; 3];
-
 pub type Point2d = [u64; 2];
+
+pub fn points_dist<const DIMS: usize>(point1: &[u64; DIMS], point2: &[u64; DIMS]) -> u64 {
+    point1
+        .iter()
+        .zip(point2.iter())
+        .map(|(d1, d2)| d1.abs_diff(*d2).pow(2))
+        .sum()
+}
+
+#[derive(Debug)]
+pub enum KDTree<const DIMS: usize> {
+    Node {
+        left: Rc<KDTree<DIMS>>,
+        right: Rc<KDTree<DIMS>>,
+        pivot: u64,
+        axis: u32,
+    },
+    Leaf {
+        points: Vec<[u64; DIMS]>,
+    },
+}
+
+impl<const DIMS: usize> KDTree<DIMS> {
+    pub fn new(points: &[[u64; DIMS]]) -> Rc<KDTree<DIMS>> {
+        let mut rng = rng();
+        KDTree::construct_recur(points, &mut rng, 0)
+    }
+    fn construct_recur(
+        points: &[[u64; DIMS]],
+        rng: &mut ThreadRng,
+        mut axis: u32,
+    ) -> Rc<KDTree<DIMS>> {
+        // it's faster to iterate over a small number of elements than to create a deep tree
+        if points.len() <= 8 {
+            Rc::new(KDTree::Leaf {
+                points: points.into(),
+            })
+        } else {
+            // try splitting on either axis,
+            for _ in 0..DIMS {
+                let axis_idx = axis as usize;
+                let pivot = {
+                    let mut sample: Vec<[u64; DIMS]> = points
+                        .iter()
+                        .choose_multiple(rng, std::cmp::min(7, points.len() / 2))
+                        .into_iter()
+                        .map(|&point| point)
+                        .collect();
+                    sample.sort_by_key(|point| point[axis_idx]);
+                    sample[sample.len() / 2][axis_idx]
+                };
+                let left: Vec<[u64; DIMS]> = points
+                    .iter()
+                    .cloned()
+                    .filter(|point| point[axis_idx] < pivot)
+                    .collect();
+                let right: Vec<[u64; DIMS]> = points
+                    .iter()
+                    .cloned()
+                    .filter(|point| point[axis_idx] >= pivot)
+                    .collect();
+                let new_axis = (axis + 1) % (DIMS as u32);
+                if left.len() != points.len() && right.len() != points.len() {
+                    return Rc::new(KDTree::Node {
+                        left: KDTree::construct_recur(&left, rng, new_axis),
+                        right: KDTree::construct_recur(&right, rng, new_axis),
+                        pivot,
+                        axis,
+                    });
+                }
+                axis = new_axis;
+            }
+            Rc::new(KDTree::Leaf {
+                points: points.into(),
+            })
+        }
+    }
+
+    pub fn print(&self) {
+        KDTree::<DIMS>::print_recur(self, 0);
+    }
+
+    fn print_recur(kdtree: &KDTree<DIMS>, indent: usize) {
+        match kdtree {
+            Self::Node {
+                left,
+                right,
+                pivot,
+                axis,
+            } => {
+                println!(
+                    "{} Node, pivot: {}, axis: {}",
+                    " ".repeat(indent),
+                    pivot,
+                    axis
+                );
+                KDTree::print_recur(left, indent + 2);
+                KDTree::print_recur(right, indent + 2);
+            }
+            Self::Leaf { points } => {
+                println!("{} Leaf {:?}", " ".repeat(indent), points);
+            }
+        }
+    }
+
+    pub fn iter_nearest<'a>(&'a self, to: [u64; DIMS]) -> KDTreeNearestIter<'a, DIMS> {
+        KDTreeNearestIter::new(self, to)
+    }
+}
+
+#[derive(Debug)]
+struct KDTreeNearestIterHeapItem<'a, const DIMS: usize> {
+    item: &'a [u64; DIMS],
+    dist: u64,
+}
+
+impl<'a, const DIMS: usize> Ord for KDTreeNearestIterHeapItem<'a, DIMS> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        other.dist.cmp(&self.dist)
+    }
+}
+
+impl<'a, const DIMS: usize> PartialOrd for KDTreeNearestIterHeapItem<'a, DIMS> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<'a, const DIMS: usize> PartialEq for KDTreeNearestIterHeapItem<'a, DIMS> {
+    fn eq(&self, other: &Self) -> bool {
+        self.dist == other.dist
+    }
+}
+
+impl<'a, const DIMS: usize> Eq for KDTreeNearestIterHeapItem<'a, DIMS> {}
+
+#[derive(Debug)]
+pub struct KDTreeNearestIter<'a, const DIMS: usize> {
+    target: [u64; DIMS],
+    nearest_items: BinaryHeap<KDTreeNearestIterHeapItem<'a, DIMS>>,
+    pruned_branches: Vec<(&'a KDTree<DIMS>, bool)>,
+}
+
+impl<'a, const DIMS: usize> KDTreeNearestIter<'a, DIMS> {
+    fn walk_to_nearest(
+        mut tree: &'a KDTree<DIMS>,
+        point: &[u64; DIMS],
+        nearest_items: &mut BinaryHeap<KDTreeNearestIterHeapItem<'a, DIMS>>,
+        pruned_branches: &mut Vec<(&'a KDTree<DIMS>, bool)>,
+    ) {
+        loop {
+            match tree {
+                KDTree::Node {
+                    left,
+                    right,
+                    pivot,
+                    axis,
+                } => {
+                    if point[*axis as usize] < *pivot {
+                        pruned_branches.push((tree, true));
+                        tree = left;
+                    } else {
+                        pruned_branches.push((tree, false));
+                        tree = right;
+                    }
+                }
+                KDTree::Leaf { points } => {
+                    for near_point in points {
+                        nearest_items.push(KDTreeNearestIterHeapItem {
+                            item: near_point,
+                            dist: points_dist(&point, near_point),
+                        });
+                    }
+                    return;
+                }
+            }
+        }
+    }
+
+    pub fn new(tree: &'a KDTree<DIMS>, point: [u64; DIMS]) -> KDTreeNearestIter<'a, DIMS> {
+        let mut nearest_items = BinaryHeap::new();
+        let mut pruned_branches = Vec::new();
+        Self::walk_to_nearest(tree, &point, &mut nearest_items, &mut pruned_branches);
+        let result = KDTreeNearestIter {
+            target: point,
+            nearest_items,
+            pruned_branches,
+        };
+        result
+    }
+}
+
+impl<'a, const DIMS: usize> Iterator for KDTreeNearestIter<'a, DIMS> {
+    type Item = &'a [u64; DIMS];
+
+    fn next(&mut self) -> Option<&'a [u64; DIMS]> {
+        let KDTreeNearestIter {
+            target,
+            nearest_items,
+            pruned_branches,
+        } = self;
+        let mut idx = 0;
+
+        while idx < pruned_branches.len() {
+            let mut to_add = None;
+            if let (
+                KDTree::Node {
+                    pivot,
+                    axis,
+                    left,
+                    right,
+                },
+                right_tree,
+            ) = pruned_branches[idx]
+            {
+                if nearest_items.is_empty()
+                    || pivot.abs_diff(target[(*axis) as usize]).pow(2)
+                        <= nearest_items.peek().unwrap().dist
+                {
+                    to_add = if right_tree { Some(right) } else { Some(left) };
+                }
+            }
+            if let Some(subtree) = to_add {
+                pruned_branches.remove(idx);
+                Self::walk_to_nearest(subtree, &target, nearest_items, pruned_branches);
+            } else {
+                idx += 1;
+            }
+        }
+        nearest_items.pop().map(|i| i.item)
+    }
+}
 
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub struct Area {
@@ -297,14 +528,11 @@ where
                 // if we found some non-zero row
                 if let Some(row) = self.highest_row_below(i, non_zero_col) {
                     if row != i {
-                        // println!("swapping: row {} and {}:\n {:6.2}", i, row, self);
                         self.swap_rows(i, row);
                     }
-                    // println!("normalizing:\n{:6.2}", self);
                     // normalize the row
                     let val = self[(i, non_zero_col)];
                     self.div_row_by(i, val);
-                    // println!("normalized:\n{:6.2}", self);
 
                     // eliminate all other rows
                     for other_row in 0..self.rows {
@@ -315,16 +543,13 @@ where
                             }
                         }
                     }
-                    // println!("subtracted:\n{:6.2}", self);
 
-                    // normalize rows below
                     non_zero_col += 1;
                     break;
                 }
                 non_zero_col += 1;
             }
         }
-        // bring ref to rref
     }
 }
 
@@ -609,23 +834,6 @@ impl Display for Rational {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    //     #[test]
-    //     fn test_partition_by_axis() {
-    //         let mut points = [
-    //             [8, 5, 4],
-    //             [2, 0, 9],
-    //             [0, 0, 0],
-    //             [1, 1, 1],
-    //             [4, 2, 3],
-    //             [1, 1, 6],
-    //         ];
-    //         let pivot = [1, 1, 1];
-    //         let partition_point = KDTree::partition_by_axis(&mut points, pivot, 1);
-    //         println!("{:?}", points);
-    //         assert!(partition_point == 3);
-    //         assert!(points[partition_point] == [1, 1, 1]);
-    //     }
 
     #[test]
     fn test_mat_to_rref_1() {

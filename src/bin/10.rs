@@ -17,12 +17,7 @@ struct Machine {
 }
 
 impl fmt::Display for Machine {
-    // This trait requires `fmt` with this exact signature.
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // Write strictly the first element into the supplied output
-        // stream: `f`. Returns `fmt::Result` which indicates whether the
-        // operation succeeded or failed. Note that `write!` uses syntax which
-        // is very similar to `println!`.
         write!(f, "target: {:#b}, buttons: ", self.target_lights)?;
         for button in &self.buttons {
             write!(f, "(")?;
@@ -185,27 +180,62 @@ fn get_free_vars<T: From<i32> + Eq + ZeroExt>(mat: &Mat<T>) -> Vec<usize> {
     free_vars
 }
 
+#[derive(Debug)]
+struct SearchState {
+    idx: usize,
+    val: u32,
+    min: u32,
+    max: u32,
+    step: Rational,
+}
+
 fn solve_machine_gaussian_search(
     mat: &Mat<Rational>,
     free_vars: &[usize],
-    max_vals: &[u64],
+    max_vals: &[u32],
 ) -> u64 {
-    let mut state: Vec<_> = free_vars
-        .iter()
-        .map(|&idx| {
-            (
-                idx,
-                0u64,
-                max_vals[idx],
-                Rational::from_int(1)
-                    - (0..mat.rows()).fold(Rational::from_int(0), |acc, row| acc + mat[(row, idx)]),
-            )
-        })
-        .collect();
+    let mut state = Vec::new();
+    for &idx in free_vars {
+        let mut var_state = SearchState {
+            idx,
+            val: 0,
+            min: 0,
+            max: max_vals[idx],
+            step: 1.into(),
+        };
+        for row in 0..mat.rows() {
+            let var = mat[(row, idx)];
+            var_state.step -= var;
+            let aug = mat[(row, mat.cols() - 1)];
+            let n_negative_vars = free_vars
+                .iter()
+                .filter(|&&var_idx| mat[(row, var_idx)] < 0.into())
+                .count();
+            if aug < 0.into() {
+                if var < 0.into() && n_negative_vars == 1 {
+                    // only this var can get this row result positive
+                    var_state.min = var_state
+                        .min
+                        .max(Into::<f64>::into(aug / var).floor() as u32);
+                }
+            } else {
+                if var > 0.into() && n_negative_vars == 0 {
+                    var_state.max = var_state
+                        .max
+                        .min(Into::<f64>::into(aug / var).ceil() as u32);
+                }
+            }
+        }
+        var_state.val = var_state.min;
+        state.push(var_state);
+    }
 
     let mut sum: Rational = 0.into();
     for r in 0..mat.rows() {
         sum += mat[(r, mat.cols() - 1)];
+    }
+    for var_state in &state {
+        sum += var_state.step * (var_state.val as i32).into();
     }
     let mut best = Rational::from_int(i32::MAX);
     loop {
@@ -214,8 +244,9 @@ fn solve_machine_gaussian_search(
             // check that all pivot values are integer
             for row in 0..mat.rows() {
                 let mut row_val = mat[(row, mat.cols() - 1)];
-                for (idx, val, _, _) in state.iter().copied() {
-                    if val != 0 {
+                for &SearchState { idx, val, .. } in &state {
+                    let coeff = mat[(row, idx)];
+                    if val != 0 && !coeff.is_zero() {
                         row_val -= mat[(row, idx)] * (val as i32).into();
                     }
                 }
@@ -230,12 +261,19 @@ fn solve_machine_gaussian_search(
         }
 
         let mut should_continue = false;
-        for (_, val, max, step) in &mut state {
+        for SearchState {
+            val,
+            min,
+            max,
+            step,
+            ..
+        } in &mut state
+        {
             *val += 1;
             sum += *step;
             if val > max {
-                sum -= Rational::from_int(*val as i32) * *step;
-                *val = 0;
+                sum -= Rational::from_int((*val - *min) as i32) * *step;
+                *val = *min;
             } else {
                 should_continue |= true;
                 break;
@@ -269,12 +307,12 @@ fn solve_machine_gaussian(machine: &Machine) -> u64 {
     }
 
     let free_vars = get_free_vars(&mat);
-    let max_vals: Vec<u64> = machine
+    let max_vals: Vec<u32> = machine
         .buttons
         .iter()
         .map(|b| {
             b.iter()
-                .map(|&wire| machine.joltages[wire as usize] as u64)
+                .map(|&wire| machine.joltages[wire as usize] as u32)
                 .min()
                 .unwrap_or(0)
         })

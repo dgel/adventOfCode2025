@@ -1,16 +1,16 @@
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{BinaryHeap, HashMap, HashSet};
 use std::rc::Rc;
 
 use by_address::ByAddress;
 use chumsky::prelude::*;
 use chumsky::text::{digits, newline};
 
+use advent_of_code::{KDTree, Point3d, points_dist};
+
 advent_of_code::solution!(8);
 
-type Point = [u64; 3];
-
-fn parse(input: &str) -> Option<Vec<Point>> {
+fn parse(input: &str) -> Option<Vec<Point3d>> {
     let num = || {
         digits::<&str, extra::Err<Rich<char>>>(10)
             .to_slice()
@@ -34,56 +34,108 @@ fn parse(input: &str) -> Option<Vec<Point>> {
     }
 }
 
-fn distance(points: &[Point], p1: usize, p2: usize) -> u64 {
-    let p1 = points[p1];
-    let p2 = points[p2];
-    (0..3)
-        .map(|d| {
-            let diff = p1[d].abs_diff(p2[d]);
-            diff * diff
-        })
-        .sum()
+type Cirquit = Rc<RefCell<Vec<usize>>>;
+
+struct CandidateConnection<I> {
+    dist: u64,
+    source: usize,
+    nearest: Point3d,
+    nearest_iter: I,
 }
 
-type Cirquit = Rc<RefCell<Vec<usize>>>;
+impl<I> Ord for CandidateConnection<I> {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        other.dist.cmp(&self.dist)
+    }
+}
+
+impl<I> PartialOrd for CandidateConnection<I> {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl<I> PartialEq for CandidateConnection<I> {
+    fn eq(&self, other: &Self) -> bool {
+        self.dist == other.dist
+    }
+}
+
+impl<I> Eq for CandidateConnection<I> {}
 
 pub fn part_one_n_connections(input: &str, n_connections: u32) -> Option<u64> {
     if let Some(points) = parse(input) {
-        let mut distances = Vec::new();
+        let index_by_point: HashMap<&Point3d, usize> =
+            HashMap::from_iter(points.iter().enumerate().map(|(i, point)| (point, i)));
 
-        // TODO: perhaps replace with kd-tree?
-        for i in 0..points.len() {
-            for j in (i + 1)..points.len() {
-                distances.push((distance(&points, i, j), i, j))
-            }
-        }
-        distances.sort();
+        let kdtree = KDTree::new(&points);
+
+        let mut nearest_heap = BinaryHeap::from_iter(
+            points
+                .iter()
+                .enumerate()
+                .map(|(i, point)| {
+                    let mut nearest_iter = kdtree.iter_nearest(*point).filter(|&&p| p != *point);
+                    if let Some(nearest) = nearest_iter.next() {
+                        Some(CandidateConnection {
+                            dist: points_dist(point, nearest),
+                            source: i,
+                            nearest: *nearest,
+                            nearest_iter,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .flatten(),
+        );
+
         let mut num_connections = 0;
         let mut cirquits: Vec<Cirquit> = points
             .iter()
             .enumerate()
             .map(|(i, _)| Rc::new(RefCell::new(vec![i])))
-            .collect(); //vec![None; points.len()];
+            .collect();
 
-        for (_, i, j) in distances {
-            if Rc::ptr_eq(&cirquits[i], &cirquits[j]) {
-            } else {
-                let (larger, smaller) = if cirquits[i].borrow().len() > cirquits[j].borrow().len() {
-                    (i, j)
-                } else {
-                    (j, i)
-                };
+        let mut seen_pairs = HashSet::new();
+        while let Some(CandidateConnection {
+            dist: _,
+            source: i,
+            nearest,
+            mut nearest_iter,
+        }) = nearest_heap.pop()
+        {
+            let j = index_by_point[&nearest];
+            let inserted = seen_pairs.insert(if i < j { (i, j) } else { (j, i) });
+            if inserted {
+                if !Rc::ptr_eq(&cirquits[i], &cirquits[j]) {
+                    let (larger, smaller) =
+                        if cirquits[i].borrow().len() > cirquits[j].borrow().len() {
+                            (i, j)
+                        } else {
+                            (j, i)
+                        };
 
-                let larger = cirquits[larger].clone();
-                for &junction in cirquits[smaller].clone().borrow().iter() {
-                    larger.borrow_mut().push(junction);
-                    cirquits[junction] = larger.clone();
+                    let larger = cirquits[larger].clone();
+                    for &junction in cirquits[smaller].clone().borrow().iter() {
+                        larger.borrow_mut().push(junction);
+                        cirquits[junction] = larger.clone();
+                    }
+                }
+                num_connections += 1;
+
+                if num_connections >= n_connections {
+                    break;
                 }
             }
-            num_connections += 1;
 
-            if num_connections >= n_connections {
-                break;
+            if let Some(nearest) = nearest_iter.next() {
+                nearest_heap.push(CandidateConnection {
+                    dist: points_dist(&points[i], nearest),
+                    source: i,
+                    nearest: *nearest,
+                    nearest_iter,
+                });
             }
         }
 
@@ -114,43 +166,79 @@ pub fn part_one(input: &str) -> Option<u64> {
 
 pub fn part_two(input: &str) -> Option<u64> {
     if let Some(points) = parse(input) {
-        let mut distances = Vec::new();
+        let index_by_point: HashMap<&Point3d, usize> =
+            HashMap::from_iter(points.iter().enumerate().map(|(i, point)| (point, i)));
 
-        // TODO: perhaps replace with kd-tree?
-        for i in 0..points.len() {
-            for j in (i + 1)..points.len() {
-                distances.push((distance(&points, i, j), i, j))
-            }
-        }
-        distances.sort();
+        let kdtree = KDTree::new(&points);
+
+        let mut nearest_heap = BinaryHeap::from_iter(
+            points
+                .iter()
+                .enumerate()
+                .map(|(i, point)| {
+                    let mut nearest_iter = kdtree.iter_nearest(*point).filter(|&&p| p != *point);
+                    if let Some(nearest) = nearest_iter.next() {
+                        Some(CandidateConnection {
+                            dist: points_dist(point, nearest),
+                            source: i,
+                            nearest: *nearest,
+                            nearest_iter,
+                        })
+                    } else {
+                        None
+                    }
+                })
+                .flatten(),
+        );
+
         let mut num_connections = 0;
         let mut cirquits: Vec<Cirquit> = points
             .iter()
             .enumerate()
             .map(|(i, _)| Rc::new(RefCell::new(vec![i])))
-            .collect(); //vec![None; points.len()];
+            .collect();
 
-        for (_, i, j) in distances {
-            if Rc::ptr_eq(&cirquits[i], &cirquits[j]) {
-            } else {
-                let (larger, smaller) = if cirquits[i].borrow().len() > cirquits[j].borrow().len() {
-                    (i, j)
-                } else {
-                    (j, i)
-                };
+        let mut seen_pairs = HashSet::new();
+        while let Some(CandidateConnection {
+            dist: _,
+            source: i,
+            nearest,
+            mut nearest_iter,
+        }) = nearest_heap.pop()
+        {
+            let j = index_by_point[&nearest];
+            let inserted = seen_pairs.insert(if i < j { (i, j) } else { (j, i) });
+            if inserted {
+                if !Rc::ptr_eq(&cirquits[i], &cirquits[j]) {
+                    let (larger, smaller) =
+                        if cirquits[i].borrow().len() > cirquits[j].borrow().len() {
+                            (i, j)
+                        } else {
+                            (j, i)
+                        };
 
-                let larger = cirquits[larger].clone();
-                for &junction in cirquits[smaller].clone().borrow().iter() {
-                    larger.borrow_mut().push(junction);
-                    cirquits[junction] = larger.clone();
+                    let larger = cirquits[larger].clone();
+                    for &junction in cirquits[smaller].clone().borrow().iter() {
+                        larger.borrow_mut().push(junction);
+                        cirquits[junction] = larger.clone();
+                    }
+                    num_connections += 1;
                 }
-                num_connections += 1;
+
+                if num_connections == points.len() - 1 {
+                    let [x1, _, _] = points[i];
+                    let [x2, _, _] = points[j];
+                    return Some(x1 * x2);
+                }
             }
 
-            if num_connections == points.len() - 1 {
-                let [x1, _, _] = points[i];
-                let [x2, _, _] = points[j];
-                return Some(x1 * x2);
+            if let Some(nearest) = nearest_iter.next() {
+                nearest_heap.push(CandidateConnection {
+                    dist: points_dist(&points[i], nearest),
+                    source: i,
+                    nearest: *nearest,
+                    nearest_iter,
+                });
             }
         }
     }
